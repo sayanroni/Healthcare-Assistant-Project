@@ -1,33 +1,96 @@
 import streamlit as st
+import google.generativeai as genai
+import os
 import nltk
 from transformers import pipeline
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 
-chatbot = pipeline("text-generation", model="distilgpt2")
+# Ensure NLTK tokenizer is available
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
+# Get API key from environment variable
+api_key = os.environ.get("My_API_KEY")
+if not api_key:
+    st.error("API Key not found. Please set the My_API_KEY environment variable.")
+else:
+    genai.configure(api_key=api_key)
+
+# Initialize sentiment analysis pipeline
+try:
+    sentiment_pipeline = pipeline("sentiment-analysis")
+except Exception as e:
+    sentiment_pipeline = None
+    st.warning("Sentiment analysis model could not be loaded. Sentiment analysis will be disabled.")
 
 def healthcare_chatbot(user_input):
-    if "symptom" in user_input:
-        return "It seems like you're experiencing symptoms. Please consult Doctor for accurate advice"
-    elif "appointment" in user_input:
-        return "Would you like me to schedule appointment with the Doctor?"
-    elif "medication" in user_input:
-        return "it's important to take prescribed medicatations regularly.If you have concerns, consults your Doctor. "
-    else: response = chatbot(user_input,max_length=500,num_return_sequences=1)
+    try:
+        model = genai.GenerativeModel("gemini-pro")
+        
+        # Pass chat history for better responses
+        history_text = "\n".join([f"{turn['role']}: {turn['message']}" for turn in st.session_state.chat_history[-5:]])
+        prompt = f"{history_text}\nUser: {user_input}\nAssistant: "
+        
+        response = model.generate_content(prompt)
+        
+        if response and hasattr(response, "text"):
+            gemini_response = response.text.strip()
+            
+            # Sentiment Analysis
+            if sentiment_pipeline:
+                try:
+                    sentiment = sentiment_pipeline(user_input)[0]
+                    gemini_response += f"\n\n(Sentiment: {sentiment['label']} - {sentiment['score']:.2f})"
+                except Exception as e:
+                    st.warning(f"Error performing sentiment analysis: {e}")
+            
+            return gemini_response
+        else:
+            return "I couldn't generate a response. Please try again."
     
-    return response[0]['generated_text']
-
+    except Exception as e:
+        return f"An error occurred: {str(e)}"
 
 def main():
-    st.title("Healthcare Assistant Chatbot")
-    user_input = st.text_input("How can I assist you today?")
-    if st.button("Submit"):
-        st.write("User : ", user_input)
-        with st.spinner("Processing your query, Please wait......"):
+    st.title("🩺 Healthcare Assistant Chatbot")
+    
+    # Sidebar for Instructions
+    with st.sidebar:
+        st.header("Instructions")
+        st.write("✔ Ask health-related questions.")
+        st.write("✔ Chat history improves response quality.")
+        st.write("✔ Sentiment analysis detects emotions.")
+    
+    # Display Chat History
+    with st.expander("📜 Chat History"):
+        for turn in st.session_state.chat_history:
+            role = "👤 User" if turn['role'] == "User" else "🤖 Assistant"
+            st.markdown(f"**{role}:** {turn['message']}")
+    
+    # Input Field
+    user_input = st.text_area("Enter your message", height=100, placeholder="Type your health-related question here...")
+    
+    # Predefined Example Questions
+    example_questions = ["What are the symptoms of COVID-19?", "How to reduce stress?", "What is the best diet for heart health?"]
+    st.write("Try asking:")
+    for question in example_questions:
+        if st.button(question):
+            user_input = question
+    
+    if st.button("Submit") and user_input.strip():
+        with st.spinner("Processing..."):
             response = healthcare_chatbot(user_input)
-        st.write("Healthcare Assistant : ",response)
-    else:
-        st.warning("Please enter a message to get a response")
+            
+            # Update session chat history
+            st.session_state.chat_history.append({"role": "User", "message": user_input})
+            st.session_state.chat_history.append({"role": "Assistant", "message": response})
+            
+            # Display User & Assistant Messages
+            st.markdown(f"**👤 User:** {user_input}")
+            st.markdown(f"**🤖 Healthcare Assistant:** {response}")
 
-
-main()
+if __name__ == "__main__":
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    main()
